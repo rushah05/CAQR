@@ -3,6 +3,10 @@
 #include<math.h>
 #include<mpi.h>
 #include <mkl.h>
+/*
+#ifndef DEBUG
+#endif
+ */
 
 /*
  *Generate Gaussian Random no
@@ -38,7 +42,7 @@ float guassrand()
 
 
 /* Generate distributed input matrix A of size n * d*/
-void getIpMat(int rank, int np, float *A, int ldA, int ln, int d)
+/*void getIpMat(int rank, int np, float *A, int ldA, int ln, int d)
 {
 	int i, j;
         for(i=0;i<ln;++i)
@@ -47,6 +51,44 @@ void getIpMat(int rank, int np, float *A, int ldA, int ln, int d)
                	{
                 	A[i+(j*ldA)] = guassrand();
                	}
+        }
+}*/
+
+/* Generate distributed input matrix A of size n * d*/
+void getIpMat(int rank, int np, float *A, int ldA, int gn, int d)
+{
+        if(rank == 0)
+        {
+                int i, j, r;
+                for(r=0; r<np; ++r)
+                {
+                        int begin = (gn * r)/np;
+                        int end = (gn * (r + 1))/np;
+                        int ln = end - begin;
+                        float *Atmp =(float*)malloc(sizeof(float)*ln*d);
+                        for(i=0;i<ln;++i)
+                        {
+                                for(j=0;j<d;++j)
+                                {
+                                        Atmp[i+(j*ldA)] = guassrand();
+                                }
+                        }
+                        if(r == 0)
+                        {
+                                LAPACKE_slacpy(LAPACK_COL_MAJOR, 'A', ln, d, Atmp, ldA, A, ldA);
+                        }
+                        else
+                                MPI_Send(Atmp, ln*d, MPI_FLOAT, r, 0, MPI_COMM_WORLD);
+                        free(Atmp);
+                }
+        }
+        else
+        {
+                MPI_Status status;
+                int begin = (gn * rank)/np;
+                int end = (gn * (rank + 1))/np;
+                int ln = end - begin;
+                MPI_Recv(A, ln*d, MPI_FLOAT, 0, 0, MPI_COMM_WORLD, &status);
         }
 }
 
@@ -63,44 +105,61 @@ int isPowerOfTwo(int np)
 }
 
 /*Extract R from Q*/
-void extractR(int rank, float *A, int ldA, float *R, int ldR, int ln, int d)
+void extractR(int rank, float *A, int ldA, float *R, int ldR, int n, int d)
 {
 	int i,j;
-	for(i=0; i<d; ++i)
+	for(i=0; i<n; ++i)
 	{
 		for(j=0; j<d; ++j)
 		{
 			R[i+(j*ldR)] = A[i+(j*ldA)];
+			if(i>j)
+				R[i+(j*ldR)] = 0.0;
 		}
 	}
 }
 
 /* Stack Rs */
-void stack(float *R1, float *R2, float *RR, int k)
+void stack(float *R1, float *R2, float *RR, int d)
 {
     int i,j;
-    for (j=0; j<k; j++) {
-        for (i=0; i<k; i++) {
-            RR[i+j*(2*k)] = R1[i+j*k];
-            RR[i+k+j*(2*k)] = R2[i+j*k];
+    for (j=0; j<d; j++) {
+        for (i=0; i<d; i++) {
+            RR[i+j*(2*d)] = R1[i+j*d];
+            RR[i+d+j*(2*d)] = R2[i+j*d];
         }
     }
 }
 
 /* Ustack Rs */
-void unstack(float *R1, float *R2, float *RR, int k)
+void unstack(float *R1, float *R2, float *RR, int d)
 {
     int i,j;
-    for (j=0; j<k; j++) {
-        for (i=0; i<k; i++) {
-            R1[i+j*k] = RR[i+j*(2*k)];
-            R2[i+j*k] = RR[i+k+j*(2*k)];
+    for (j=0; j<d; j++) {
+        for (i=0; i<d; i++) {
+            R1[i+j*d] = RR[i+j*(2*d)];
+            R2[i+j*d] = RR[i+d+j*(2*d)];
         }
     }
 }
 
+/* Print Array */
+void printArray(char *Arrname,float *Arr, int ldArr, int n, int d)
+{
+        printf("%s :\n",Arrname);
+        int i,j;
+        for(i=0; i<n; ++i)
+        {
+                for(j=0; j<d; ++j)
+                {
+                        printf("%f\t",Arr[i+(j*ldArr)]);
+                }
+                printf("\n");
+        }
+}
 
-/*Communication avoidance QR
+
+/*Tall Skinny Communication avoidance QR
  * 1)First perform QR on each process
  * 2)Stack Rs by sharing accross alternate process
  * 3)Perform QR on the stacked Rs until you get the final Q
@@ -120,7 +179,6 @@ void comm_avoidance_qr(int rank, int np, float *A, int ldA, float* R, int ldR, i
 	float *stackedR = (float*)malloc(sizeof(float)*2*d*d);
 	float *Qtmp = (float*)malloc(sizeof(float)*2*d*d);
     	float *Atmp = (float*)malloc(sizeof(float)*2*ln*d);
-
 	
 	/** MKL's library to perform QR 
  * 	The QR is replaced in A. The upper triangular forms R
@@ -154,7 +212,9 @@ void comm_avoidance_qr(int rank, int np, float *A, int ldA, float* R, int ldR, i
             		}
         	}
     	}
-    	extractR(rank, R, ldR, R1, ldR, ln, d);	
+    	
+	LAPACKE_slacpy(LAPACK_COL_MAJOR, 'A', d, d, R1, d, R, d);
+
     	for (r=log2(np)-1; r>=0; r--) {
         	if (r== 0 || !( rank & ((1<<r)-1) )) {
 		/** Send **/
@@ -183,15 +243,48 @@ void comm_avoidance_qr(int rank, int np, float *A, int ldA, float* R, int ldR, i
     free(Q1); free(Q2); free(Q);
     free(Atmp); free(Qtmp);
 	
-}
+}	
 
+
+
+void  fnorm(int rank, float *testA, int ldtestA, float *A, int ldA, float *R, int ldR, int gn, int d, int ln)
+{
+	float fnorm = 0.0;
+	float *K = (float*)malloc(sizeof(float)*gn*d);
+	float *Q = (float*)malloc(sizeof(float)*gn*d);
+	float *QR = (float*)malloc(sizeof(float)*gn*d);
+	MPI_Gather(testA, (ln * d), MPI_FLOAT, K, (ln * d), MPI_FLOAT, 0, MPI_COMM_WORLD);
+	MPI_Gather(A, (ln * d), MPI_FLOAT, Q, (ln * d), MPI_FLOAT, 0, MPI_COMM_WORLD);
+
+	if(rank == 0)
+	{
+		//printArray("K", K, gn, gn, d);
+		//printArray("Q", Q, gn, gn, d);
+		//printArray("R", R, d, d, d);
+
+		int i,j;
+		cblas_sgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, gn, d, d, 1.0, Q, gn, R, d, -1.0, K, gn);
+		printArray("K-QR", K, gn, gn, d);
+
+		for(i=0; i<gn; ++i)
+        	{
+            		for(j=0; j<d; ++j)
+            		{
+                		float result = K[i + (j * gn)] * K[i + (j * gn)];
+                		fnorm = fnorm + result;
+            		}
+        	}
+		printf("The fnorm is %f\n", fnorm);	
+	}
+	free(K);free(QR);free(Q);
+}
 
 int main(int argc, char *argv[])
 {
 	int i,j, rank,np;
-	int gn = 512;
-	int d = 64;
-	//int k = 16;
+	int gn = atoi(argv[1]);
+	int d = atoi(argv[2]);
+	//int k = atoi(argv[3]);
 
 	/** Initialize MPI **/
         MPI_Init(&argc, &argv);
@@ -202,8 +295,11 @@ int main(int argc, char *argv[])
 	int begin = (gn * rank)/np;
         int end = (gn * (rank + 1))/np;
         int ln = end - begin; 
-	float *A = (float*)malloc(sizeof(float)*ln*d);
+
+	float *A =(float*)malloc(sizeof(float)*ln*d);
 	float *R =(float*)malloc(sizeof(float)*d*d);
+	
+	/**leading dimension of the matrices**/
 	int ldA = ln;
 	int ldR = d;
 
@@ -218,10 +314,26 @@ int main(int argc, char *argv[])
 	}
 
 	/** Generate distributed input matrix A using Gaussian random no*/
-	getIpMat(rank, np, A, ldA, ln, d);
-
+	getIpMat(rank, np, A, ldA, gn, d);
+	
+	/** testA is added temporarily for testing putposes only**/ 
+        float *testA =(float*)malloc(sizeof(float)*ln*d);
+	LAPACKE_slacpy(LAPACK_COL_MAJOR, 'A', ln, d, A, ldA, testA, ldA);
+	
 	/** Perform Communication avoidance QR **/
-	comm_avoidance_qr(rank, np, A, ldA, R, ldR,  ln, d);		
+	double timestart = MPI_Wtime();
+		comm_avoidance_qr(rank, np, A, ldA, R, ldR,  ln, d);		
+	double timeend = MPI_Wtime();
+
+
+	if(rank == 0)
+		printf("Execution time %f secs\n", timeend-timestart);
+
+		/** Calculate the fnorm(A-QR). if the fnorm is less than or close to 10^6, the test was successful
+ * 		testA is the A - distributed input matrix
+ * 		Q is A after performing CAQR - distributed Q
+ * 		R is R after performing TSQR**/
+		fnorm(rank, testA, ldA, A, ldA, R, ldR, gn, d, ln);
 
 	MPI_Finalize();
 	free(A);	
