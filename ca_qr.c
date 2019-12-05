@@ -4,10 +4,7 @@
 #include<mpi.h>
 #include<mkl.h>
 #include<math.h>
-/*
-#ifndef DEBUG
-#endif
- */
+
 
 /*
  *Generate Gaussian Random no
@@ -41,19 +38,6 @@ float guassrand()
 	return num;
 }
 
-
-/* Generate distributed input matrix A of size n * d*/
-/*void getIpMat(int rank, int np, float *A, int ldA, int ln, int d)
-{
-	int i, j;
-        for(i=0;i<ln;++i)
-        {
-        	for(j=0;j<d;++j)
-               	{
-                	A[i+(j*ldA)] = guassrand();
-               	}
-        }
-}*/
 
 /* Generate distributed input matrix A of size n * d*/
 void getIpMat(int rank, int np, float *A, int ldA, int gn, int d)
