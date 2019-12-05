@@ -2,7 +2,8 @@
 #include<stdlib.h>
 #include<math.h>
 #include<mpi.h>
-#include <mkl.h>
+#include<mkl.h>
+#include<math.h>
 /*
 #ifndef DEBUG
 #endif
@@ -184,7 +185,7 @@ void comm_avoidance_qr(int rank, int np, float *A, int ldA, float* R, int ldR, i
  * 	The QR is replaced in A. The upper triangular forms R
  * 	Lower triangular along with tau forms Q **/
 	LAPACKE_sgeqrf(LAPACK_COL_MAJOR, ln, d, A, ldA, tau);
-	extractR(rank, A, ldA, R1, ldR, ln, d);
+	extractR(rank, A, ldA, R1, ldR, d, d);
 	/** MKL's library to form Q explicitly in A**/
         LAPACKE_sorgqr(LAPACK_COL_MAJOR, ln, d, d, A, ldA, tau);
 
@@ -211,6 +212,7 @@ void comm_avoidance_qr(int rank, int np, float *A, int ldA, float* R, int ldR, i
                 		MPI_Send(R1, d*d, MPI_FLOAT, rank ^ (1<<r), 0, MPI_COMM_WORLD);
             		}
         	}
+	
     	}
     	
 	LAPACKE_slacpy(LAPACK_COL_MAJOR, 'A', d, d, R1, d, R, d);
@@ -249,7 +251,7 @@ void comm_avoidance_qr(int rank, int np, float *A, int ldA, float* R, int ldR, i
 
 void  fnorm(int rank, float *testA, int ldtestA, float *A, int ldA, float *R, int ldR, int gn, int d, int ln)
 {
-	float fnorm = 0.0;
+	float fnorm = 0.0, fnormK = 0.0;
 	float *K = (float*)malloc(sizeof(float)*gn*d);
 	float *Q = (float*)malloc(sizeof(float)*gn*d);
 	float *QR = (float*)malloc(sizeof(float)*gn*d);
@@ -263,18 +265,27 @@ void  fnorm(int rank, float *testA, int ldtestA, float *A, int ldA, float *R, in
 		//printArray("R", R, d, d, d);
 
 		int i,j;
-		cblas_sgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, gn, d, d, 1.0, Q, gn, R, d, -1.0, K, gn);
-		printArray("K-QR", K, gn, gn, d);
+		for(i=0; i<gn; ++i)
+                {
+                        for(j=0; j<d; ++j)
+                        {
+                                float result = K[i + (j * gn)] * K[i + (j * gn)];
+                                fnormK = fnormK + result;
+                        }
+                }
+
+		cblas_sgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, gn, d, d, 1.0, Q, gn, R, d, 0.0, QR, gn);
+		//printArray("QR", QR, gn, gn, d);
 
 		for(i=0; i<gn; ++i)
         	{
             		for(j=0; j<d; ++j)
             		{
-                		float result = K[i + (j * gn)] * K[i + (j * gn)];
+                		float result = QR[i + (j * gn)] * QR[i + (j * gn)];
                 		fnorm = fnorm + result;
             		}
         	}
-		printf("The fnorm is %f\n", fnorm);	
+		printf("The fnorm(QR)::%f, fnorm(K)::%f\n", sqrt(fnorm), sqrt(fnormK));	
 	}
 	free(K);free(QR);free(Q);
 }
@@ -284,7 +295,6 @@ int main(int argc, char *argv[])
 	int i,j, rank,np;
 	int gn = atoi(argv[1]);
 	int d = atoi(argv[2]);
-	//int k = atoi(argv[3]);
 
 	/** Initialize MPI **/
         MPI_Init(&argc, &argv);
@@ -311,6 +321,11 @@ int main(int argc, char *argv[])
 			printf("Please pass the number of processors in the power of 2\n");
 			return 0;
 		}
+		if(d >= gn)
+                {
+                        printf("The program onlu works for Tall - skinny matrix (n,d) where d<n");
+                        return 0;
+                }
 	}
 
 	/** Generate distributed input matrix A using Gaussian random no*/
@@ -322,18 +337,18 @@ int main(int argc, char *argv[])
 	
 	/** Perform Communication avoidance QR **/
 	double timestart = MPI_Wtime();
-		comm_avoidance_qr(rank, np, A, ldA, R, ldR,  ln, d);		
+		comm_avoidance_qr(rank, np, A, ldA, R, ldR,  ln, d);
 	double timeend = MPI_Wtime();
 
 
 	if(rank == 0)
 		printf("Execution time %f secs\n", timeend-timestart);
 
-		/** Calculate the fnorm(A-QR). if the fnorm is less than or close to 10^6, the test was successful
- * 		testA is the A - distributed input matrix
- * 		Q is A after performing CAQR - distributed Q
- * 		R is R after performing TSQR**/
-		fnorm(rank, testA, ldA, A, ldA, R, ldR, gn, d, ln);
+	/** Calculate the fnorm(A-QR). if the fnorm is less than or close to 10^6, the test was successful
+ * 	testA is the A - distributed input matrix
+ * 	Q is A after performing CAQR - distributed Q
+ * 	R is R after performing TSQR**/
+	fnorm(rank, testA, ldA, A, ldA, R, ldR, gn, d, ln);
 
 	MPI_Finalize();
 	free(A);	
