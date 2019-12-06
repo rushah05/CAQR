@@ -307,7 +307,7 @@ int main(int argc, char *argv[])
 		}
 		if(d >= gn)
                 {
-                        printf("The program onlu works for Tall - skinny matrix (n,d) where d<n");
+                        printf("The program only works for Tall - skinny matrix (n,d) where d<n");
                         return 0;
                 }
 	}
@@ -315,7 +315,7 @@ int main(int argc, char *argv[])
         {
                 if(rank == 0)
                 {
-                        printf("ERROR: ln %d must be larger than d %d; reduce np %d.\n", ln, d, np);
+                        printf("ERROR: block size (ln) %d must be larger than number of columns (d) %d; reduce np %d.\n", ln, d, np);
                         return 0;
                 }
 	}
