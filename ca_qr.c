@@ -311,6 +311,15 @@ int main(int argc, char *argv[])
                         return 0;
                 }
 	}
+	if (ln <= d)
+        {
+                if(rank == 0)
+                {
+                        printf("ERROR: ln %d must be larger than d %d; reduce np %d.\n", ln, d, np);
+                        return 0;
+                }
+	}
+                
 
 	/** Generate distributed input matrix A using Gaussian random no*/
 	getIpMat(rank, np, A, ldA, gn, d);
